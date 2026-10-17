@@ -1,5 +1,5 @@
-Local patch for packages/imgui (Dear ImGui 1.92.9b), required by the debug-only
-ImAgent library in src/agent/.
+Local patch for packages/imgui (Dear ImGui 1.93.0), required by the debug-only
+ImAgent library in packages/im-agent/.
   imgui_draw.cpp:     reports every drawn string so get_text can read it (compiled
                       only with IMGUI_AGENT_TEXT_HOOK).
   imgui_internal.h:   item hooks for the library next to the Test Engine ones, so
@@ -9,12 +9,14 @@ ImAgent library in src/agent/.
   imgui.cpp, imgui_widgets.cpp: item registration sites that were compiled only
                       with IMGUI_ENABLE_TEST_ENGINE now use IMGUI_ENABLE_ITEM_HOOKS.
 
-Apply from the repo root (packages/ is gitignored, so re-apply after restoring it):
-  patch -p1 -d packages/imgui < src/agent/patches/imgui-agent-hooks.patch
+Apply from the repo root:
+  git apply --directory=packages/imgui packages/im-agent/patches/imgui-agent-hooks.patch
 
+diff --git a/imgui.cpp b/imgui.cpp
+index 3705e72..aedebfc 100644
 --- a/imgui.cpp
 +++ b/imgui.cpp
-@@ -7928,8 +7928,8 @@
+@@ -8018,8 +8018,8 @@ bool ImGui::Begin(const char* name, bool* p_open, ImGuiWindowFlags flags)
          }
  
          // [Test Engine] Register whole window in the item system (before submitting further decorations)
@@ -25,7 +27,7 @@ Apply from the repo root (packages/ is gitignored, so re-apply after restoring i
          {
              IM_ASSERT(window->IDStack.Size == 1);
              window->IDStack.Size = 0; // As window->IDStack[0] == window->ID here, make sure TestEngine doesn't erroneously see window as parent of itself.
-@@ -8234,7 +8234,7 @@
+@@ -8325,7 +8325,7 @@ bool ImGui::Begin(const char* name, bool* p_open, ImGuiWindowFlags flags)
  #endif
  
          // [Test Engine] Register title bar / tab with MoveId.
@@ -34,7 +36,7 @@ Apply from the repo root (packages/ is gitignored, so re-apply after restoring i
          if (!(window->Flags & ImGuiWindowFlags_NoTitleBar))
          {
              window->DC.NavLayerCurrent = ImGuiNavLayer_Menu;
-@@ -11498,7 +11498,7 @@
+@@ -11613,7 +11613,7 @@ bool ImGui::ItemAdd(const ImRect& bb, ImGuiID id, const ImRect* nav_bb_arg, ImGu
      g.NextItemData.HasFlags = ImGuiNextItemDataFlags_None;
      g.NextItemData.ItemFlagsSet = ImGuiItemFlags_None;
  
@@ -43,9 +45,11 @@ Apply from the repo root (packages/ is gitignored, so re-apply after restoring i
      if (id != 0)
          IMGUI_TEST_ENGINE_ITEM_ADD(id, g.LastItemData.NavRect, &g.LastItemData);
  #endif
+diff --git a/imgui_draw.cpp b/imgui_draw.cpp
+index 0d54ee8..4103704 100644
 --- a/imgui_draw.cpp
 +++ b/imgui_draw.cpp
-@@ -5806,8 +5806,16 @@
+@@ -7333,8 +7333,16 @@ void ImFont::RenderChar(ImDrawList* draw_list, float size, const ImVec2& pos, Im
  
  // Note: as with every ImDrawList drawing function, this expects that the font atlas texture is bound.
  // DO NOT CALL DIRECTLY THIS WILL CHANGE WILDLY IN 2026. Use ImDrawList::AddText().
@@ -62,12 +66,14 @@ Apply from the repo root (packages/ is gitignored, so re-apply after restoring i
  begin:
      // Align to be pixel perfect
      float x = pos.x;
+diff --git a/imgui_internal.h b/imgui_internal.h
+index 420f070..879ee4a 100644
 --- a/imgui_internal.h
 +++ b/imgui_internal.h
-@@ -1031,8 +1031,9 @@
+@@ -1089,8 +1089,9 @@ enum ImGuiItemStatusFlags_
      //ImGuiItemStatusFlags_FocusedByTabbing = 1 << 8,   // Removed IN 1.90.1 (Dec 2023). The trigger is part of g.NavActivateId. See commit 54c1bdeceb.
      ImGuiItemStatusFlags_EditedInternal     = 1 << 11,  // Similar to ImGuiItemStatusFlags_Edited but bypassing ImGuiItemFlags_NoMarkEdited.
- 
+     
 -    // Additional status + semantic for ImGuiTestEngine
 -#ifdef IMGUI_ENABLE_TEST_ENGINE
 +    // Additional status + semantic for ImGuiTestEngine (and the agent library: IMGUI_AGENT_HOOKS)
@@ -76,7 +82,7 @@ Apply from the repo root (packages/ is gitignored, so re-apply after restoring i
      ImGuiItemStatusFlags_Openable           = 1 << 20,  // Item is an openable (e.g. TreeNode)
      ImGuiItemStatusFlags_Opened             = 1 << 21,  // Opened status
      ImGuiItemStatusFlags_Checkable          = 1 << 22,  // Item is a checkable (e.g. CheckBox, MenuItem)
-@@ -4096,14 +4097,31 @@
+@@ -4174,14 +4175,31 @@ extern void         ImGuiTestEngineHook_Log(ImGuiContext* ctx, const char* fmt,
  extern const char*  ImGuiTestEngine_FindItemDebugLabel(ImGuiContext* ctx, ImGuiID id);
  
  // In IMGUI_VERSION_NUM >= 18934: changed IMGUI_TEST_ENGINE_ITEM_ADD(bb,id) to IMGUI_TEST_ENGINE_ITEM_ADD(id,bb,item_data);
@@ -90,8 +96,8 @@ Apply from the repo root (packages/ is gitignored, so re-apply after restoring i
 -#define IMGUI_TEST_ENGINE_ITEM_INFO(_ID,_LABEL,_FLAGS)      ((void)g)
 +#define IMGUI_TE_ITEM_ADD(_ID,_BB,_ITEM_DATA)               ((void)0)
 +#define IMGUI_TE_ITEM_INFO(_ID,_LABEL,_FLAGS)               ((void)0)
-+#endif
-+
+ #endif
+ 
 +// [Local patch] Same item hooks for the agent library (src/agent), independent of the Test Engine so both can be used together.
 +#ifdef IMGUI_AGENT_HOOKS
 +extern bool         GImGuiAgentHookItems;
@@ -104,17 +110,19 @@ Apply from the repo root (packages/ is gitignored, so re-apply after restoring i
 +#define IMGUI_AGENT_ITEM_ADD(_ID,_BB,_ITEM_DATA)            ((void)0)
 +#define IMGUI_AGENT_ITEM_INFO(_ID,_LABEL,_FLAGS)            ((void)0)
 +#define IMGUI_ITEM_HOOKS_ACTIVE(_G)                         ((_G).TestEngineHookItems)
- #endif
- 
++#endif
++
 +#define IMGUI_TEST_ENGINE_ITEM_ADD(_ID,_BB,_ITEM_DATA)      do { IMGUI_TE_ITEM_ADD(_ID,_BB,_ITEM_DATA); IMGUI_AGENT_ITEM_ADD(_ID,_BB,_ITEM_DATA); } while (0)
 +#define IMGUI_TEST_ENGINE_ITEM_INFO(_ID,_LABEL,_FLAGS)      do { (void)g; IMGUI_TE_ITEM_INFO(_ID,_LABEL,_FLAGS); IMGUI_AGENT_ITEM_INFO(_ID,_LABEL,_FLAGS); } while (0)
 +
  //-----------------------------------------------------------------------------
  
  #if defined(__clang__)
+diff --git a/imgui_widgets.cpp b/imgui_widgets.cpp
+index 821b15f..9b72230 100644
 --- a/imgui_widgets.cpp
 +++ b/imgui_widgets.cpp
-@@ -568,7 +568,7 @@
+@@ -570,7 +570,7 @@ bool ImGui::ButtonBehavior(const ImRect& bb, ImGuiID id, bool* out_hovered, bool
      if (flatten_hovered_children)
          g.HoveredWindow = window;
  
