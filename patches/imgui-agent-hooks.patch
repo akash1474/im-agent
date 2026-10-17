@@ -1,0 +1,125 @@
+Local patch for packages/imgui (Dear ImGui 1.92.9b), required by the debug-only
+ImAgent library in src/agent/.
+  imgui_draw.cpp:     reports every drawn string so get_text can read it (compiled
+                      only with IMGUI_AGENT_TEXT_HOOK).
+  imgui_internal.h:   item hooks for the library next to the Test Engine ones, so
+                      both can be used in one build (compiled only with
+                      IMGUI_AGENT_HOOKS); also exposes the Openable/Checkable/...
+                      item status flags and defines IMGUI_ENABLE_ITEM_HOOKS.
+  imgui.cpp, imgui_widgets.cpp: item registration sites that were compiled only
+                      with IMGUI_ENABLE_TEST_ENGINE now use IMGUI_ENABLE_ITEM_HOOKS.
+
+Apply from the repo root (packages/ is gitignored, so re-apply after restoring it):
+  patch -p1 -d packages/imgui < src/agent/patches/imgui-agent-hooks.patch
+
+--- a/imgui.cpp
++++ b/imgui.cpp
+@@ -7928,8 +7928,8 @@
+         }
+ 
+         // [Test Engine] Register whole window in the item system (before submitting further decorations)
+-#ifdef IMGUI_ENABLE_TEST_ENGINE
+-        if (g.TestEngineHookItems)
++#ifdef IMGUI_ENABLE_ITEM_HOOKS
++        if (IMGUI_ITEM_HOOKS_ACTIVE(g))
+         {
+             IM_ASSERT(window->IDStack.Size == 1);
+             window->IDStack.Size = 0; // As window->IDStack[0] == window->ID here, make sure TestEngine doesn't erroneously see window as parent of itself.
+@@ -8234,7 +8234,7 @@
+ #endif
+ 
+         // [Test Engine] Register title bar / tab with MoveId.
+-#ifdef IMGUI_ENABLE_TEST_ENGINE
++#ifdef IMGUI_ENABLE_ITEM_HOOKS
+         if (!(window->Flags & ImGuiWindowFlags_NoTitleBar))
+         {
+             window->DC.NavLayerCurrent = ImGuiNavLayer_Menu;
+@@ -11498,7 +11498,7 @@
+     g.NextItemData.HasFlags = ImGuiNextItemDataFlags_None;
+     g.NextItemData.ItemFlagsSet = ImGuiItemFlags_None;
+ 
+-#ifdef IMGUI_ENABLE_TEST_ENGINE
++#ifdef IMGUI_ENABLE_ITEM_HOOKS
+     if (id != 0)
+         IMGUI_TEST_ENGINE_ITEM_ADD(id, g.LastItemData.NavRect, &g.LastItemData);
+ #endif
+--- a/imgui_draw.cpp
++++ b/imgui_draw.cpp
+@@ -5806,8 +5806,16 @@
+ 
+ // Note: as with every ImDrawList drawing function, this expects that the font atlas texture is bound.
+ // DO NOT CALL DIRECTLY THIS WILL CHANGE WILDLY IN 2026. Use ImDrawList::AddText().
++#ifdef IMGUI_AGENT_TEXT_HOOK
++// [Local patch] Implemented by src/agent/src/Recorder.cpp. Every drawn string (AddText, InputText, ...) passes through RenderText.
++extern void ImGuiAgentHook_Text(ImFont* font, float font_size, const ImVec2& pos, const char* text_begin, const char* text_end, float wrap_width, const ImVec4& clip_rect, ImU32 col);
++#endif
++
+ void ImFont::RenderText(ImDrawList* draw_list, float size, const ImVec2& pos, ImU32 col, const ImVec4& clip_rect, const char* text_begin, const char* text_end, float wrap_width, ImDrawTextFlags flags)
+ {
++#ifdef IMGUI_AGENT_TEXT_HOOK
++    ImGuiAgentHook_Text(this, size, pos, text_begin, text_end, wrap_width, clip_rect, col);
++#endif
+ begin:
+     // Align to be pixel perfect
+     float x = pos.x;
+--- a/imgui_internal.h
++++ b/imgui_internal.h
+@@ -1031,8 +1031,9 @@
+     //ImGuiItemStatusFlags_FocusedByTabbing = 1 << 8,   // Removed IN 1.90.1 (Dec 2023). The trigger is part of g.NavActivateId. See commit 54c1bdeceb.
+     ImGuiItemStatusFlags_EditedInternal     = 1 << 11,  // Similar to ImGuiItemStatusFlags_Edited but bypassing ImGuiItemFlags_NoMarkEdited.
+ 
+-    // Additional status + semantic for ImGuiTestEngine
+-#ifdef IMGUI_ENABLE_TEST_ENGINE
++    // Additional status + semantic for ImGuiTestEngine (and the agent library: IMGUI_AGENT_HOOKS)
++#if defined(IMGUI_ENABLE_TEST_ENGINE) || defined(IMGUI_AGENT_HOOKS)
++#define IMGUI_ENABLE_ITEM_HOOKS
+     ImGuiItemStatusFlags_Openable           = 1 << 20,  // Item is an openable (e.g. TreeNode)
+     ImGuiItemStatusFlags_Opened             = 1 << 21,  // Opened status
+     ImGuiItemStatusFlags_Checkable          = 1 << 22,  // Item is a checkable (e.g. CheckBox, MenuItem)
+@@ -4096,14 +4097,31 @@
+ extern const char*  ImGuiTestEngine_FindItemDebugLabel(ImGuiContext* ctx, ImGuiID id);
+ 
+ // In IMGUI_VERSION_NUM >= 18934: changed IMGUI_TEST_ENGINE_ITEM_ADD(bb,id) to IMGUI_TEST_ENGINE_ITEM_ADD(id,bb,item_data);
+-#define IMGUI_TEST_ENGINE_ITEM_ADD(_ID,_BB,_ITEM_DATA)      if (g.TestEngineHookItems) ImGuiTestEngineHook_ItemAdd(&g, _ID, _BB, _ITEM_DATA)    // Register item bounding box
+-#define IMGUI_TEST_ENGINE_ITEM_INFO(_ID,_LABEL,_FLAGS)      if (g.TestEngineHookItems) ImGuiTestEngineHook_ItemInfo(&g, _ID, _LABEL, _FLAGS)    // Register item label and status flags (optional)
++#define IMGUI_TE_ITEM_ADD(_ID,_BB,_ITEM_DATA)               if (g.TestEngineHookItems) ImGuiTestEngineHook_ItemAdd(&g, _ID, _BB, _ITEM_DATA)    // Register item bounding box
++#define IMGUI_TE_ITEM_INFO(_ID,_LABEL,_FLAGS)               if (g.TestEngineHookItems) ImGuiTestEngineHook_ItemInfo(&g, _ID, _LABEL, _FLAGS)    // Register item label and status flags (optional)
+ #define IMGUI_TEST_ENGINE_LOG(_FMT,...)                     ImGuiTestEngineHook_Log(&g, _FMT, __VA_ARGS__)                                      // Custom log entry from user land into test log
+ #else
+-#define IMGUI_TEST_ENGINE_ITEM_ADD(_ID,_BB,_ITEM_DATA)      ((void)0)
+-#define IMGUI_TEST_ENGINE_ITEM_INFO(_ID,_LABEL,_FLAGS)      ((void)g)
++#define IMGUI_TE_ITEM_ADD(_ID,_BB,_ITEM_DATA)               ((void)0)
++#define IMGUI_TE_ITEM_INFO(_ID,_LABEL,_FLAGS)               ((void)0)
++#endif
++
++// [Local patch] Same item hooks for the agent library (src/agent), independent of the Test Engine so both can be used together.
++#ifdef IMGUI_AGENT_HOOKS
++extern bool         GImGuiAgentHookItems;
++extern void         ImGuiAgentHook_ItemAdd(ImGuiContext* ctx, ImGuiID id, const ImRect& bb, const ImGuiLastItemData* item_data);
++extern void         ImGuiAgentHook_ItemInfo(ImGuiContext* ctx, ImGuiID id, const char* label, ImGuiItemStatusFlags flags);
++#define IMGUI_AGENT_ITEM_ADD(_ID,_BB,_ITEM_DATA)            if (GImGuiAgentHookItems) ImGuiAgentHook_ItemAdd(&g, _ID, _BB, _ITEM_DATA)
++#define IMGUI_AGENT_ITEM_INFO(_ID,_LABEL,_FLAGS)            if (GImGuiAgentHookItems) ImGuiAgentHook_ItemInfo(&g, _ID, _LABEL, _FLAGS)
++#define IMGUI_ITEM_HOOKS_ACTIVE(_G)                         ((_G).TestEngineHookItems || GImGuiAgentHookItems)
++#else
++#define IMGUI_AGENT_ITEM_ADD(_ID,_BB,_ITEM_DATA)            ((void)0)
++#define IMGUI_AGENT_ITEM_INFO(_ID,_LABEL,_FLAGS)            ((void)0)
++#define IMGUI_ITEM_HOOKS_ACTIVE(_G)                         ((_G).TestEngineHookItems)
+ #endif
+ 
++#define IMGUI_TEST_ENGINE_ITEM_ADD(_ID,_BB,_ITEM_DATA)      do { IMGUI_TE_ITEM_ADD(_ID,_BB,_ITEM_DATA); IMGUI_AGENT_ITEM_ADD(_ID,_BB,_ITEM_DATA); } while (0)
++#define IMGUI_TEST_ENGINE_ITEM_INFO(_ID,_LABEL,_FLAGS)      do { (void)g; IMGUI_TE_ITEM_INFO(_ID,_LABEL,_FLAGS); IMGUI_AGENT_ITEM_INFO(_ID,_LABEL,_FLAGS); } while (0)
++
+ //-----------------------------------------------------------------------------
+ 
+ #if defined(__clang__)
+--- a/imgui_widgets.cpp
++++ b/imgui_widgets.cpp
+@@ -568,7 +568,7 @@
+     if (flatten_hovered_children)
+         g.HoveredWindow = window;
+ 
+-#ifdef IMGUI_ENABLE_TEST_ENGINE
++#ifdef IMGUI_ENABLE_ITEM_HOOKS
+     // Alternate registration spot, for when caller didn't use ItemAdd()
+     if (g.LastItemData.ID != id)
+         IMGUI_TEST_ENGINE_ITEM_ADD(id, bb, NULL);
